@@ -5,6 +5,7 @@ import Carbon.HIToolbox
 final class SettingsModel: ObservableObject {
     @Published var shortcuts: [String: String]
     @Published var recordingMode: CaptureMode?
+    @Published var annotate = CaptureSettings.annotate
     @Published var saveFolderPath = CaptureSettings.saveFolder.path
     @Published var saveToFolder = CaptureSettings.saveToFolder
     @Published var format = CaptureSettings.format
@@ -53,6 +54,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
     private func refreshFromSystem() {
         model.shortcuts = Dictionary(
             uniqueKeysWithValues: CaptureMode.allCases.map { ($0.rawValue, Shortcut.display($0)) })
+        model.annotate = CaptureSettings.annotate
         model.saveFolderPath = CaptureSettings.saveFolder.path
         model.launchAtLogin = LoginItem.isEnabled
         model.autoCheck = Updater.autoCheckEnabled
@@ -213,6 +215,13 @@ struct SettingsView: View {
                 }
 
                 SettingsSection(title: "Ao capturar") {
+                    ToggleRow(
+                        title: "Editar antes de copiar/guardar",
+                        subtitle: "Mostra o editor (seleção ajustável + anotações) em vez de exportar logo.",
+                        isOn: Binding(
+                            get: { model.annotate },
+                            set: { model.annotate = $0; CaptureSettings.annotate = $0 }))
+                    RowDivider()
                     ToggleRow(
                         title: "Copiar para o clipboard",
                         isOn: Binding(

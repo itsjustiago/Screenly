@@ -20,10 +20,16 @@ clipboard e mostra as capturas recentes. Feito por nós, sem anúncios nem lixo.
 ## Features
 
 - **Três modos de captura**, cada um com o seu atalho global:
-  - **Região** (`⌃⇧2`) — arrasta para selecionar; Espaço alterna para modo janela.
+  - **Região** (`⌃⇧2`) — arrasta para selecionar; ajusta a seleção antes de exportar.
   - **Janela** (`⌃⇧3`) — escolhe uma janela (sem sombra).
   - **Ecrã inteiro** (`⌃⇧4`) — captura tudo, com atraso opcional.
-- **Guarda + clipboard** — cada captura vai para uma pasta configurável **e** para o
+- **Editor de anotação** (por defeito) — ao capturar, o ecrã **congela** e podes:
+  - **ajustar a seleção** — arrastar as pegas dos cantos/lados ou mover o retângulo;
+  - **desenhar por cima** — seta, retângulo, círculo, linha, caneta, marcador e texto,
+    com **paleta de cores** e **espessura** à escolha; **anular** com ⌘Z;
+  - só depois **Copiar** (⌘C) ou **Guardar** (⌘S). Esc cancela.
+  - Desliga em *Definições → "Editar antes de copiar/guardar"* para exportação imediata.
+- **Guarda + clipboard** — cada captura pode ir para uma pasta configurável e/ou para o
   clipboard, pronta a colar.
 - **Pré-visualização flutuante** ao capturar — clica para revelar no Finder.
 - **Histórico de recentes** na barra de menus + uma **galeria pesquisável** com todas as
@@ -77,9 +83,13 @@ Sources/Screenly/
   main.swift              — entry point (menu-bar app)
   AppDelegate.swift        — NSStatusItem, popover, hotkeys, lifecycle
   CaptureMode.swift        — modos de captura + atalhos por modo
-  CaptureEngine.swift      — wrapper de `screencapture` (guardar + clipboard + preview)
+  CaptureEngine.swift      — wrapper de `screencapture` + entrega (CaptureOutput)
   CaptureStore.swift       — histórico de capturas (imagens + thumbnails)
   CapturePreview.swift     — pré-visualização flutuante pós-captura
+  Annotation.swift         — modelo de anotação + ShapesCanvas (render partilhado)
+  AnnotationToolbar.swift  — barra de ferramentas (tools, cores, espessura, exportar)
+  SelectionOverlay.swift   — overlay de região: congelar + selecionar + anotar
+  AnnotationEditorWindow   — editor em janela (modos janela / ecrã inteiro)
   Permissions.swift        — permissão de Gravação de Ecrã
   MenuPanel.swift          — painel da barra de menus
   GalleryPanel.swift       — galeria pesquisável de todas as capturas
@@ -93,17 +103,23 @@ Sources/Screenly/
 
 ## Como funciona a captura
 
-O Screenly envolve o binário do sistema `/usr/sbin/screencapture`, o que dá a UI de
-seleção nativa (crosshair, Espaço para modo janela) de borla e é robusto entre monitores.
-Cada captura é lida do ficheiro, guardada na pasta escolhida + no histórico interno, e
-copiada para o clipboard. O motor está atrás de um protocolo (`CaptureEngine`), por isso
-pode passar mais tarde para **ScreenCaptureKit** (anotação, captura programática) sem mexer
-no resto da app.
+Com o **editor ligado** (default), a captura de região **congela** o ecrã com
+**ScreenCaptureKit** e mostra um overlay onde selecionas/ajustas a área e anotas por cima.
+A exportação é **WYSIWYG**: o mesmo `ShapesCanvas` que desenhas no ecrã é recomposto sobre
+a imagem congelada via `ImageRenderer` e recortado à seleção — o PNG/JPG sai igual ao que vês.
+Janela e ecrã inteiro capturam com `screencapture` e abrem a imagem no editor.
+
+Com o **editor desligado**, o Screenly envolve o binário do sistema `/usr/sbin/screencapture`
+(UI de seleção nativa, robusto entre monitores) e exporta logo para pasta + clipboard.
+
+O motor de captura está atrás do protocolo `CaptureEngine` (impl `SystemCapture`), o que
+deixa espaço para trocar por outras fontes sem mexer nos chamadores.
 
 ## Notes
 
 - Os modos interativos (região/janela) muitas vezes nem precisam da permissão de Gravação de
   Ecrã (a captura é iniciada pelo utilizador via UI do sistema); o ecrã inteiro programático
   precisa — por isso pedimo-la no onboarding.
-- Debug: `SCREENLY_DEBUG_WINDOW=settings|gallery|onboarding` abre a janela no arranque;
+- Debug: `SCREENLY_DEBUG_WINDOW=settings|gallery|onboarding|editor|overlay` abre a janela no
+  arranque; `SCREENLY_DEBUG_EXPORT=/caminho.png` renderiza anotações de exemplo e sai;
   `SCREENLY_DEBUG_VERSION=0.0.1` força uma versão baixa para testar o auto-update.

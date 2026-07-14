@@ -1,8 +1,8 @@
 import AppKit
 
-// Brand teal/cyan, top→bottom gradient (matches DesignKit's Brand).
-let top = NSColor(srgbRed: 0.07, green: 0.71, blue: 0.647, alpha: 1)   // #12B5A5
-let bottom = NSColor(srgbRed: 0.055, green: 0.486, blue: 0.51, alpha: 1) // #0E7C82
+// Brand blue, top→bottom gradient (matches DesignKit's Brand).
+let top = NSColor(srgbRed: 0.192, green: 0.608, blue: 1.0, alpha: 1)   // #319BFF
+let bottom = NSColor(srgbRed: 0.039, green: 0.384, blue: 0.878, alpha: 1) // #0A62E0
 
 func tint(_ image: NSImage, _ color: NSColor) -> NSImage {
     let out = NSImage(size: image.size)

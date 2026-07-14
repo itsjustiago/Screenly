@@ -6,6 +6,9 @@ import ServiceManagement
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let store = CaptureStore()
     private lazy var engine = SystemCapture(store: store)
+    private lazy var selectionOverlay = SelectionOverlayController(
+        store: store, fallback: { [weak self] mode in self?.engine.capture(mode) })
+    private lazy var editor = AnnotationEditorController(store: store)
     private let menuModel = ScreenlyMenuModel()
     private let onboarding = OnboardingController()
     private let settings = SettingsController()
@@ -20,6 +23,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+
+        // Debug: render sample annotations to a PNG and quit (verifies the export path).
+        if let out = ProcessInfo.processInfo.environment["SCREENLY_DEBUG_EXPORT"] {
+            Self.debugExport(to: out)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { NSApp.terminate(nil) }
+            return
+        }
+        // Debug: render the annotation toolbar to a PNG and quit.
+        if let out = ProcessInfo.processInfo.environment["SCREENLY_DEBUG_TOOLBAR"] {
+            Self.debugToolbar(to: out)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { NSApp.terminate(nil) }
+            return
+        }
+
         store.load()
         setupStatusItem()
 
@@ -49,8 +66,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         case "settings": settings.show()
         case "gallery": gallery.show()
         case "onboarding": onboarding.show()
+        case "editor": if let img = Self.debugImage(NSSize(width: 1200, height: 800)) { editor.open(image: img, mode: .screen) }
+        case "overlay": selectionOverlay.beginDebug()
         default: break
         }
+    }
+
+    /// Render one sample shape per tool over a synthetic image, via the real
+    /// `ShapesCanvas` + `ImageRenderer` export path, and write it to `path`.
+    static func debugExport(to path: String) {
+        let size = CGSize(width: 800, height: 500)
+        guard let base = debugImage(size) else { return }
+        let shapes: [AnnotationShape] = [
+            AnnotationShape(tool: .rectangle, colorHex: "#FF3B30", lineWidth: 6,
+                            points: [CGPoint(x: 60, y: 70), CGPoint(x: 300, y: 230)]),
+            AnnotationShape(tool: .ellipse, colorHex: "#34C759", lineWidth: 6,
+                            points: [CGPoint(x: 340, y: 80), CGPoint(x: 520, y: 220)]),
+            AnnotationShape(tool: .arrow, colorHex: "#007AFF", lineWidth: 6,
+                            points: [CGPoint(x: 120, y: 410), CGPoint(x: 430, y: 300)]),
+            AnnotationShape(tool: .freehand, colorHex: "#FFCC00", lineWidth: 5,
+                            points: [CGPoint(x: 560, y: 300), CGPoint(x: 600, y: 350),
+                                     CGPoint(x: 645, y: 300), CGPoint(x: 690, y: 360)]),
+            AnnotationShape(tool: .highlighter, colorHex: "#AF52DE", lineWidth: 9,
+                            points: [CGPoint(x: 80, y: 470), CGPoint(x: 300, y: 470)]),
+            AnnotationShape(tool: .text, colorHex: "#FFFFFF", lineWidth: 9,
+                            points: [CGPoint(x: 350, y: 420)], text: "Screenly ✎"),
+            AnnotationShape(tool: .rectangle, colorHex: "#000000", lineWidth: 6,
+                            points: [CGPoint(x: 560, y: 410), CGPoint(x: 740, y: 470)], filled: true),
+        ]
+        let content = ZStack(alignment: .topLeading) {
+            Image(nsImage: base).resizable().frame(width: size.width, height: size.height)
+            ShapesCanvas(shapes: shapes).frame(width: size.width, height: size.height)
+        }
+        .frame(width: size.width, height: size.height)
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+        guard let cg = renderer.cgImage else { return }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        if let data = rep.representation(using: .png, properties: [:]) {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+
+    /// Render the annotation toolbar over a neutral backdrop, for layout review.
+    static func debugToolbar(to path: String) {
+        let model = AnnotationModel()
+        let content = AnnotationToolbar(model: model, onCopy: {}, onSave: {}, onCancel: {})
+            .padding(40)
+            .background(LinearGradient(colors: [.gray, .black], startPoint: .top, endPoint: .bottom))
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+        guard let cg = renderer.cgImage else { return }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        if let data = rep.representation(using: .png, properties: [:]) {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+
+    /// A synthetic image for verifying the editor/overlay without a real capture.
+    static func debugImage(_ size: NSSize) -> NSImage? {
+        let img = NSImage(size: size)
+        img.lockFocus()
+        NSGradient(colors: [.systemTeal, .systemIndigo])?.draw(in: NSRect(origin: .zero, size: size), angle: -45)
+        ("Screenly debug" as NSString).draw(at: NSPoint(x: 40, y: 40),
+            withAttributes: [.font: NSFont.systemFont(ofSize: 40), .foregroundColor: NSColor.white])
+        img.unlockFocus()
+        return img
     }
 
     // MARK: - Hotkeys
@@ -73,7 +154,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func capture(_ mode: CaptureMode) {
         dismissPopover()
-        engine.capture(mode)
+        guard CaptureSettings.annotate else { engine.capture(mode); return }
+        switch mode {
+        case .region:
+            // Freeze the screen → interactive selection + annotation overlay.
+            selectionOverlay.begin()
+        case .window, .screen:
+            // Capture, then open the annotation editor window.
+            engine.captureImage(mode) { [weak self] image in
+                guard let self, let image else { return }
+                self.editor.open(image: image, mode: mode)
+            }
+        }
     }
 
     // MARK: - Status bar

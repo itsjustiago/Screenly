@@ -6,11 +6,11 @@ import SwiftUI
 // MARK: - Brand
 
 enum Brand {
-    /// Teal / cyan gradient stops — match the app icon (`make-icon.swift`).
-    static let top = Color(red: 0.07, green: 0.71, blue: 0.647)    // #12B5A5
-    static let bottom = Color(red: 0.055, green: 0.486, blue: 0.51) // #0E7C82
+    /// Blue gradient stops — match the app icon (`make-icon.swift`).
+    static let top = Color(red: 0.192, green: 0.608, blue: 1.0)    // #319BFF
+    static let bottom = Color(red: 0.039, green: 0.384, blue: 0.878) // #0A62E0
     /// Solid tint for controls (toggles, selection, accents).
-    static let tint = Color(red: 0.08, green: 0.64, blue: 0.58)
+    static let tint = Color(red: 0.039, green: 0.518, blue: 1.0)   // #0A84FF
 
     static let gradient = LinearGradient(
         colors: [top, bottom], startPoint: .top, endPoint: .bottom)

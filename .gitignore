@@ -1,0 +1,15 @@
+# Swift Package Manager / build
+.build/
+DerivedData/
+
+# App bundles & distribution artifacts
+*.app
+*.dmg
+*.zip
+
+# Icon intermediates (regenerate with make-icon.swift + iconutil)
+*.iconset/
+icon-preview.png
+
+# macOS
+.DS_Store

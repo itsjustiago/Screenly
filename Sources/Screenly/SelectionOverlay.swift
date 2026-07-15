@@ -71,6 +71,7 @@ final class SelectionOverlayController: NSObject {
     private var panel: OverlayPanel?
     private var keyMonitor: Any?
     private var frozen: FrozenScreen?
+    private var isPreparing = false
     private let selection = SelectionState()
     private let model = AnnotationModel()
 
@@ -81,12 +82,24 @@ final class SelectionOverlayController: NSObject {
     }
 
     func begin() {
-        guard panel == nil else { return }
-        ScreenFreezer.capture { [weak self] frozen in
-            guard let self else { return }
-            guard let frozen else { self.fallback(.region); return }
-            self.present(frozen)
+        // Guard against re-entrancy *synchronously*: the freeze below is async, and
+        // `panel` isn't set until it returns. Without this, hammering the hotkey
+        // while the freeze runs would spin up a second overlay that gets orphaned
+        // at shield level — blocking clicks and swallowing the next capture.
+        guard panel == nil, !isPreparing else { return }
+        isPreparing = true
+
+        var settled = false
+        let finish: (FrozenScreen?) -> Void = { [weak self] frozen in
+            guard let self, self.isPreparing, !settled else { return }
+            settled = true
+            self.isPreparing = false
+            if let frozen { self.present(frozen) } else { self.fallback(.region) }
         }
+        ScreenFreezer.capture { finish($0) }
+        // Safety net: if ScreenCaptureKit never calls back, don't wedge forever —
+        // fall back to the native picker so a capture still happens.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { finish(nil) }
     }
 
     /// Debug: present the overlay over a synthetic frozen image (no capture needed).
@@ -209,8 +222,10 @@ final class SelectionOverlayController: NSObject {
         panel?.orderOut(nil)
         panel = nil
         frozen = nil
+        isPreparing = false
         model.shapes = []
         selection.rect = nil
+        NSCursor.arrow.set()
     }
 }
 
@@ -223,12 +238,8 @@ struct SelectionOverlayView: View {
     var onExport: (CGRect, Bool) -> Void
     var onCancel: () -> Void
 
-    @State private var dragMode: DragMode = .none
-    @State private var anchorRect: CGRect = .zero
+    @State private var session = DragSession()
     @FocusState private var textFocused: Bool
-
-    private enum Handle { case tl, tr, bl, br, t, b, l, r }
-    private enum DragMode: Equatable { case none, newSel, move, resize(Handle), draw, text, ignore }
 
     var body: some View {
         GeometryReader { geo in
@@ -255,6 +266,7 @@ struct SelectionOverlayView: View {
                     .gesture(DragGesture(minimumDistance: 0)
                         .onChanged { changed($0, bounds: bounds) }
                         .onEnded { ended($0, bounds: bounds) })
+                    .onContinuousHover { phase in updateCursor(phase) }
 
                 if let rect = selection.rect, rect.width > 8, rect.height > 8 {
                     toolbar(rect: rect, bounds: bounds)
@@ -288,7 +300,7 @@ struct SelectionOverlayView: View {
             guard let r = selection.rect else { return }
             ctx.stroke(Path(r), with: .color(Brand.tint), style: StrokeStyle(lineWidth: 1.5))
             if model.tool == .select {
-                for p in handlePoints(r) {
+                for p in SelectionGeometry.handlePoints(r) {
                     let box = CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)
                     ctx.fill(Path(roundedRect: box, cornerRadius: 2), with: .color(.white))
                     ctx.stroke(Path(roundedRect: box, cornerRadius: 2), with: .color(Brand.tint), style: StrokeStyle(lineWidth: 1))
@@ -340,121 +352,103 @@ struct SelectionOverlayView: View {
 
     // MARK: Gesture
 
+    /// Handles get a generous touch target; the interior needs a little slack too
+    /// so a press right on the edge still grabs to move.
+    private let handleTolerance: CGFloat = 14
+    private let moveInset: CGFloat = 6
+
     private func changed(_ v: DragGesture.Value, bounds: CGSize) {
-        if dragMode == .none { startDrag(v) }
-        switch dragMode {
-        case .newSel:
-            selection.rect = normalized(from: v.startLocation, to: clamp(v.location, in: bounds))
+        if session.mode == .none { beginDrag(at: v.startLocation) }
+        switch session.mode {
+        case .newSelection:
+            selection.rect = SelectionGeometry.normalized(
+                from: v.startLocation, to: SelectionGeometry.clampPoint(v.location, in: bounds))
         case .move:
-            selection.rect = clampRect(anchorRect.offsetBy(dx: v.translation.width, dy: v.translation.height), in: bounds)
+            selection.rect = SelectionGeometry.clampRect(
+                session.anchor.offsetBy(dx: v.translation.width, dy: v.translation.height), in: bounds)
         case .resize(let h):
-            selection.rect = resize(anchorRect, handle: h, by: v.translation, in: bounds)
+            selection.rect = SelectionGeometry.resize(session.anchor, handle: h, by: v.translation, in: bounds)
         case .draw:
-            model.updateDraw(to: v.location)
-        default:
+            model.updateDraw(to: SelectionGeometry.clampPoint(v.location, in: bounds))
+        case .none, .text, .ignore:
             break
         }
     }
 
     private func ended(_ v: DragGesture.Value, bounds: CGSize) {
-        switch dragMode {
+        let moved = abs(v.translation.width) >= 3 || abs(v.translation.height) >= 3
+        switch session.mode {
         case .draw:
             model.endDraw()
         case .text:
             if let r = selection.rect, r.contains(v.location) { model.addText(at: v.location) }
         case .move:
             // A tap (no real drag) inside the selection = pick a shape to edit.
-            if abs(v.translation.width) < 3, abs(v.translation.height) < 3 {
-                model.selectShape(at: v.startLocation)
-            } else if let r = selection.rect {
-                selection.rect = r.standardized
-            }
+            if moved { if let r = selection.rect { selection.rect = r.standardized } }
+            else { model.selectShape(at: v.startLocation) }
         case .resize:
             if let r = selection.rect { selection.rect = r.standardized }
-        case .newSel:
+        case .newSelection:
             model.selectedID = nil
-        default:
+            // A real drag makes a new selection; a stray click keeps the old one
+            // (or clears it if there was none) instead of collapsing it to nothing.
+            if moved, let r = selection.rect, r.width >= 4, r.height >= 4 {
+                selection.rect = r.standardized
+            } else {
+                selection.rect = session.previousSelection
+            }
+        case .none, .ignore:
             break
         }
-        dragMode = .none
+        session.reset()
     }
 
-    private func startDrag(_ v: DragGesture.Value) {
-        let p = v.startLocation
+    private func beginDrag(at p: CGPoint) {
         if model.editingTextID != nil { model.endTextEditing() }
-
-        guard let r = selection.rect else {
-            dragMode = .newSel
+        let intent = SelectionGeometry.dragIntent(
+            at: p, selection: selection.rect, tool: model.tool,
+            handleTolerance: handleTolerance, moveInset: moveInset)
+        session.mode = intent
+        switch intent {
+        case .newSelection:
+            session.previousSelection = selection.rect
             selection.rect = CGRect(origin: p, size: .zero)
-            return
-        }
-
-        switch model.tool {
-        case .select:
-            if let h = handleHit(r, at: p) { dragMode = .resize(h); anchorRect = r }
-            else if r.insetBy(dx: -4, dy: -4).contains(p) { dragMode = .move; anchorRect = r }
-            else { dragMode = .newSel; selection.rect = CGRect(origin: p, size: .zero) }
-        case .text:
-            dragMode = .text
-        default:
-            if r.insetBy(dx: -2, dy: -2).contains(p) { dragMode = .draw; model.beginDraw(at: p) }
-            else { dragMode = .ignore }
+        case .move, .resize:
+            session.anchor = selection.rect ?? .zero
+        case .draw:
+            model.beginDraw(at: p)
+        case .none, .text, .ignore:
+            break
         }
     }
 
-    // MARK: Geometry helpers
+    // MARK: Cursor
 
-    private func handlePoints(_ r: CGRect) -> [CGPoint] {
-        [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
-         CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY),
-         CGPoint(x: r.midX, y: r.minY), CGPoint(x: r.midX, y: r.maxY),
-         CGPoint(x: r.minX, y: r.midY), CGPoint(x: r.maxX, y: r.midY)]
+    /// Give a visual hint of what a press will do: move hand inside the selection,
+    /// resize arrows on the handles, crosshair when drawing a new region.
+    private func updateCursor(_ phase: HoverPhase) {
+        guard case .active(let p) = phase else { NSCursor.arrow.set(); return }
+        guard let r = selection.rect, r.width > 0, r.height > 0 else {
+            NSCursor.crosshair.set(); return   // no selection yet → drawing a new region
+        }
+        if model.tool == .select {
+            if let h = SelectionGeometry.handle(at: p, of: r, tolerance: handleTolerance) {
+                cursor(for: h).set()
+            } else if r.insetBy(dx: -moveInset, dy: -moveInset).contains(p) {
+                NSCursor.openHand.set()
+            } else {
+                NSCursor.crosshair.set()
+            }
+        } else {
+            (r.insetBy(dx: -2, dy: -2).contains(p) ? NSCursor.crosshair : NSCursor.arrow).set()
+        }
     }
 
-    private func handleHit(_ r: CGRect, at p: CGPoint) -> Handle? {
-        let hit: CGFloat = 12
-        func near(_ pt: CGPoint) -> Bool { abs(p.x - pt.x) <= hit && abs(p.y - pt.y) <= hit }
-        if near(CGPoint(x: r.minX, y: r.minY)) { return .tl }
-        if near(CGPoint(x: r.maxX, y: r.minY)) { return .tr }
-        if near(CGPoint(x: r.minX, y: r.maxY)) { return .bl }
-        if near(CGPoint(x: r.maxX, y: r.maxY)) { return .br }
-        if near(CGPoint(x: r.midX, y: r.minY)) { return .t }
-        if near(CGPoint(x: r.midX, y: r.maxY)) { return .b }
-        if near(CGPoint(x: r.minX, y: r.midY)) { return .l }
-        if near(CGPoint(x: r.maxX, y: r.midY)) { return .r }
-        return nil
-    }
-
-    private func resize(_ r: CGRect, handle: Handle, by t: CGSize, in bounds: CGSize) -> CGRect {
-        var minX = r.minX, minY = r.minY, maxX = r.maxX, maxY = r.maxY
+    private func cursor(for handle: SelectionHandle) -> NSCursor {
         switch handle {
-        case .tl: minX += t.width; minY += t.height
-        case .tr: maxX += t.width; minY += t.height
-        case .bl: minX += t.width; maxY += t.height
-        case .br: maxX += t.width; maxY += t.height
-        case .t:  minY += t.height
-        case .b:  maxY += t.height
-        case .l:  minX += t.width
-        case .r:  maxX += t.width
+        case .l, .r: return .resizeLeftRight
+        case .t, .b: return .resizeUpDown
+        case .tl, .br, .tr, .bl: return .crosshair   // no public diagonal cursor
         }
-        let rect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY).standardized
-        return clampRect(rect, in: bounds)
-    }
-
-    private func normalized(from a: CGPoint, to b: CGPoint) -> CGRect {
-        CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
-    }
-
-    private func clamp(_ p: CGPoint, in bounds: CGSize) -> CGPoint {
-        CGPoint(x: min(max(p.x, 0), bounds.width), y: min(max(p.y, 0), bounds.height))
-    }
-
-    private func clampRect(_ r: CGRect, in bounds: CGSize) -> CGRect {
-        var rect = r
-        if rect.minX < 0 { rect.origin.x = 0 }
-        if rect.minY < 0 { rect.origin.y = 0 }
-        if rect.maxX > bounds.width { rect.origin.x = min(rect.origin.x, bounds.width - rect.width) }
-        if rect.maxY > bounds.height { rect.origin.y = min(rect.origin.y, bounds.height - rect.height) }
-        return rect
     }
 }

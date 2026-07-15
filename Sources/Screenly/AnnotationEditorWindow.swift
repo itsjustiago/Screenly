@@ -152,7 +152,6 @@ struct AnnotationEditorView: View {
     var onSave: () -> Void
     var onCancel: () -> Void
 
-    @State private var drawing = false
     @FocusState private var textFocused: Bool
 
     var body: some View {
@@ -204,12 +203,17 @@ struct AnnotationEditorView: View {
 
     private func changed(_ v: DragGesture.Value) {
         guard model.tool.isDrawing, model.tool != .text else { return }
-        if !drawing { drawing = true; if model.editingTextID != nil { model.endTextEditing() }; model.beginDraw(at: v.startLocation) }
+        // `model.live` (reference-typed) is the source of truth for "a stroke is in
+        // progress" — reliable to read back mid-gesture, unlike a local @State flag.
+        if model.live == nil {
+            if model.editingTextID != nil { model.endTextEditing() }
+            model.beginDraw(at: v.startLocation)
+        }
         model.updateDraw(to: v.location)
     }
 
     private func ended(_ v: DragGesture.Value) {
-        if drawing { model.endDraw(); drawing = false; return }
+        if model.live != nil { model.endDraw(); return }
         switch model.tool {
         case .text: model.addText(at: v.location)
         case .select: model.selectShape(at: v.location)

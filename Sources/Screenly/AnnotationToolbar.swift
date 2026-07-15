@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The floating annotation toolbar: tools, colours, fill, stroke width, undo and
 /// the export actions. Shared by the region overlay and the editor window.
@@ -7,6 +8,9 @@ struct AnnotationToolbar: View {
     var onCopy: () -> Void
     var onSave: () -> Void
     var onCancel: () -> Void
+    /// True when hosted in the shield-level capture overlay, so the system colour
+    /// panel is raised above it.
+    var elevatedColorPanel: Bool = false
 
     private let widths: [(CGFloat, CGFloat)] = [(3, 6), (6, 9), (11, 13)]  // (lineWidth, dotSize)
 
@@ -59,7 +63,35 @@ struct AnnotationToolbar: View {
                 }
                 .buttonStyle(.plain)
             }
+            customColorWell
         }
+    }
+
+    /// Opens the system colour panel (with eyedropper) for a custom colour.
+    private var customColorWell: some View {
+        let isCustom = !AnnotationPalette.colors.contains { isSelected($0) }
+        return Button {
+            ColorPanelController.shared.present(current: model.colorHex, elevated: elevatedColorPanel) { hex in
+                model.colorHex = hex
+                if model.selectedID != nil { model.recolorSelected(hex) }
+            }
+        } label: {
+            ZStack {
+                Circle().fill(Color(hex: model.colorHex)).frame(width: 16, height: 16)
+                Circle()
+                    .strokeBorder(
+                        AngularGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red], center: .center),
+                        lineWidth: 2.5)
+                    .frame(width: 19, height: 19)
+                Circle().strokeBorder(Color.primary, lineWidth: 2).padding(-4)
+                    .frame(width: 19, height: 19)
+                    .opacity(isCustom ? 1 : 0)
+            }
+            .padding(3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Cor personalizada… (com conta-gotas)")
     }
 
     // MARK: Fill + width
@@ -157,5 +189,52 @@ struct AnnotationToolbar: View {
 
     private var divider: some View {
         Rectangle().fill(.primary.opacity(0.12)).frame(width: 1, height: 22)
+    }
+}
+
+/// Bridges the shared `NSColorPanel` to the annotation model. Raises the panel
+/// above the shield-level capture overlay so it's actually usable there, and
+/// gives us the system eyedropper for picking colours off the screenshot.
+final class ColorPanelController: NSObject {
+    static let shared = ColorPanelController()
+    private var onChange: ((String) -> Void)?
+
+    func present(current hex: String, elevated: Bool, onChange: @escaping (String) -> Void) {
+        self.onChange = onChange
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.isContinuous = true
+        panel.color = NSColor(Color(hex: hex))
+        panel.setTarget(self)
+        panel.setAction(#selector(changed(_:)))
+        panel.level = elevated
+            ? NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 1)
+            : .floating
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func dismiss() {
+        let panel = NSColorPanel.shared
+        panel.setTarget(nil)
+        panel.setAction(nil)
+        panel.level = .normal
+        panel.orderOut(nil)
+        onChange = nil
+    }
+
+    @objc private func changed(_ sender: NSColorPanel) {
+        onChange?(sender.color.hexStringSRGB)
+    }
+}
+
+extension NSColor {
+    /// #RRGGBB from an sRGB conversion of this colour.
+    var hexStringSRGB: String {
+        let c = usingColorSpace(.sRGB) ?? self
+        let r = Int(round(c.redComponent * 255))
+        let g = Int(round(c.greenComponent * 255))
+        let b = Int(round(c.blueComponent * 255))
+        return String(format: "#%02X%02X%02X", r, g, b)
     }
 }

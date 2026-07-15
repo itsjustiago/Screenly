@@ -203,6 +203,7 @@ final class SelectionOverlayController: NSObject {
     }
 
     func close() {
+        ColorPanelController.shared.dismiss()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         panel?.orderOut(nil)
@@ -332,7 +333,8 @@ struct SelectionOverlayView: View {
             model: model,
             onCopy: { onExport(rect, true) },
             onSave: { onExport(rect, false) },
-            onCancel: onCancel)
+            onCancel: onCancel,
+            elevatedColorPanel: true)
             .position(x: x, y: y)
     }
 

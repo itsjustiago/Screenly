@@ -111,6 +111,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     }
 
     func close() {
+        ColorPanelController.shared.dismiss()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         window?.orderOut(nil)

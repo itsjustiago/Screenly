@@ -68,7 +68,7 @@ final class SelectionOverlayController: NSObject {
     private let preview = CapturePreview()
     private let fallback: (CaptureMode) -> Void
 
-    private var panel: OverlayPanel?
+    private(set) var panel: OverlayPanel?
     private var keyMonitor: Any?
     private var frozen: FrozenScreen?
     private var isPreparing = false
@@ -82,11 +82,14 @@ final class SelectionOverlayController: NSObject {
     }
 
     func begin() {
+        // A previous overlay may still exist: re-front it if it's really on screen,
+        // tear it down if it was hidden behind our back — never ignore the request.
+        if reclaimExistingSession() { return }
         // Guard against re-entrancy *synchronously*: the freeze below is async, and
         // `panel` isn't set until it returns. Without this, hammering the hotkey
         // while the freeze runs would spin up a second overlay that gets orphaned
         // at shield level — blocking clicks and swallowing the next capture.
-        guard panel == nil, !isPreparing else { return }
+        guard !isPreparing else { return }
         isPreparing = true
 
         var settled = false
@@ -102,6 +105,23 @@ final class SelectionOverlayController: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { finish(nil) }
     }
 
+    /// Handles a capture request that arrives while `panel` is still set. Returns
+    /// true when a live overlay took the event (re-keyed so Esc/⌘C work again even
+    /// if the app lost activation mid-session). A panel that is no longer visible
+    /// was ordered out without `close()` — historically AppKit itself did this on
+    /// app deactivation, via NSPanel's `hidesOnDeactivate` default — and used to
+    /// wedge every future capture; now it's torn down so a fresh session can start.
+    func reclaimExistingSession() -> Bool {
+        guard let existing = panel else { return false }
+        guard existing.isVisible else {
+            close()
+            return false
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        existing.makeKeyAndOrderFront(nil)
+        return true
+    }
+
     /// Debug: present the overlay over a synthetic frozen image (no capture needed).
     func beginDebug() {
         guard panel == nil, let screen = NSScreen.main,
@@ -115,14 +135,7 @@ final class SelectionOverlayController: NSObject {
         model.tool = .select
         selection.rect = nil
 
-        let panel = OverlayPanel(contentRect: frozen.frame,
-                                 styleMask: [.borderless], backing: .buffered, defer: false)
-        panel.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.setFrame(frozen.frame, display: true)
+        let panel = Self.makeShieldPanel(frame: frozen.frame)
 
         let view = SelectionOverlayView(
             frozen: frozen, model: model, selection: selection,
@@ -138,6 +151,23 @@ final class SelectionOverlayController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
+    }
+
+    /// The shield-level panel that hosts the frozen screen. `hidesOnDeactivate`
+    /// must stay false: NSPanel's default (true) let AppKit order the overlay out
+    /// on app deactivation without going through `close()`, leaving `panel` set
+    /// and silently swallowing every subsequent capture until relaunch.
+    static func makeShieldPanel(frame: CGRect) -> OverlayPanel {
+        let panel = OverlayPanel(contentRect: frame,
+                                 styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.setFrame(frame, display: true)
+        return panel
     }
 
     // MARK: Keyboard

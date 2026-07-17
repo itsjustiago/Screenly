@@ -20,6 +20,10 @@ final class CapturePreview {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
+        // NSPanel hides itself on app deactivation by default — for a menu-bar app
+        // that's "almost immediately", which killed the toast the moment the user
+        // clicked back into their work. Keep it up for its full 4 seconds.
+        panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
 
         let root = CapturePreviewView(

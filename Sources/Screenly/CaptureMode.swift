@@ -1,10 +1,26 @@
 import AppKit
 import Carbon.HIToolbox
 
+/// Anything that owns a user-configurable global shortcut: the three capture
+/// modes and the screen colour picker. Lets `Shortcut` and the Settings UI treat
+/// them uniformly instead of hard-coding `CaptureMode`.
+protocol ShortcutSlot {
+    /// Stable storage namespace + identity (`region`, `window`, `screen`, `colorPicker`).
+    var shortcutKey: String { get }
+    /// Distinct Carbon hotkey id (must be unique across all slots).
+    var hotKeyID: UInt32 { get }
+    var defaultKeyCode: Int { get }
+    var defaultModifiers: NSEvent.ModifierFlags { get }
+    var defaultDisplay: String { get }
+    /// Human-readable name for the Settings row.
+    var title: String { get }
+}
+
 /// The three capture modes Screenly offers, each with its own global shortcut.
-enum CaptureMode: String, CaseIterable, Identifiable {
+enum CaptureMode: String, CaseIterable, Identifiable, ShortcutSlot {
     case region, window, screen
     var id: String { rawValue }
+    var shortcutKey: String { rawValue }
 
     var title: String {
         switch self {
@@ -58,45 +74,60 @@ enum CaptureMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// The user-configurable global shortcut for each capture mode, persisted in
-/// UserDefaults. Generalises Clippy's single-shortcut store to one per mode.
+/// The stand-alone screen colour picker (eyedropper). Not a capture, so it lives
+/// outside `CaptureMode`, but it owns a configurable global shortcut all the same.
+enum PickerAction: String, CaseIterable, Identifiable, ShortcutSlot {
+    case eyedropper
+    var id: String { rawValue }
+    var shortcutKey: String { "colorPicker" }
+    /// 1…3 belong to the capture modes; the picker takes 4.
+    var hotKeyID: UInt32 { 4 }
+    /// ⌃⇧1 — sits right before the capture modes' ⌃⇧2/3/4.
+    var defaultKeyCode: Int { kVK_ANSI_1 }
+    var defaultModifiers: NSEvent.ModifierFlags { [.control, .shift] }
+    var defaultDisplay: String { "⌃⇧1" }
+    var title: String { "Escolher cor do ecrã" }
+}
+
+/// The user-configurable global shortcut for each slot (capture modes + the colour
+/// picker), persisted in UserDefaults. Generalises Clippy's single-shortcut store.
 enum Shortcut {
     private static var d: UserDefaults { .standard }
-    private static func codeKey(_ m: CaptureMode) -> String { "hotKeyCode.\(m.rawValue)" }
-    private static func modsKey(_ m: CaptureMode) -> String { "hotKeyMods.\(m.rawValue)" }
-    private static func displayKey(_ m: CaptureMode) -> String { "hotKeyDisplay.\(m.rawValue)" }
+    private static func codeKey(_ s: ShortcutSlot) -> String { "hotKeyCode.\(s.shortcutKey)" }
+    private static func modsKey(_ s: ShortcutSlot) -> String { "hotKeyMods.\(s.shortcutKey)" }
+    private static func displayKey(_ s: ShortcutSlot) -> String { "hotKeyDisplay.\(s.shortcutKey)" }
 
-    static func keyCode(_ m: CaptureMode) -> Int {
-        d.object(forKey: codeKey(m)) as? Int ?? m.defaultKeyCode
+    static func keyCode(_ s: ShortcutSlot) -> Int {
+        d.object(forKey: codeKey(s)) as? Int ?? s.defaultKeyCode
     }
 
-    static func modifiers(_ m: CaptureMode) -> NSEvent.ModifierFlags {
-        if let raw = d.object(forKey: modsKey(m)) as? Int {
+    static func modifiers(_ s: ShortcutSlot) -> NSEvent.ModifierFlags {
+        if let raw = d.object(forKey: modsKey(s)) as? Int {
             return NSEvent.ModifierFlags(rawValue: UInt(raw))
         }
-        return m.defaultModifiers
+        return s.defaultModifiers
     }
 
-    static func display(_ m: CaptureMode) -> String {
-        d.string(forKey: displayKey(m)) ?? m.defaultDisplay
+    static func display(_ s: ShortcutSlot) -> String {
+        d.string(forKey: displayKey(s)) ?? s.defaultDisplay
     }
 
-    static func save(_ m: CaptureMode, keyCode: Int, modifiers: NSEvent.ModifierFlags, display: String) {
-        d.set(keyCode, forKey: codeKey(m))
-        d.set(Int(modifiers.rawValue), forKey: modsKey(m))
-        d.set(display, forKey: displayKey(m))
+    static func save(_ s: ShortcutSlot, keyCode: Int, modifiers: NSEvent.ModifierFlags, display: String) {
+        d.set(keyCode, forKey: codeKey(s))
+        d.set(Int(modifiers.rawValue), forKey: modsKey(s))
+        d.set(display, forKey: displayKey(s))
     }
 
-    static func resetToDefault(_ m: CaptureMode) {
-        d.removeObject(forKey: codeKey(m))
-        d.removeObject(forKey: modsKey(m))
-        d.removeObject(forKey: displayKey(m))
+    static func resetToDefault(_ s: ShortcutSlot) {
+        d.removeObject(forKey: codeKey(s))
+        d.removeObject(forKey: modsKey(s))
+        d.removeObject(forKey: displayKey(s))
     }
 
     /// Carbon modifier mask for RegisterEventHotKey.
-    static func carbonModifiers(_ m: CaptureMode) -> UInt32 {
+    static func carbonModifiers(_ s: ShortcutSlot) -> UInt32 {
         var c: UInt32 = 0
-        let mods = modifiers(m)
+        let mods = modifiers(s)
         if mods.contains(.command) { c |= UInt32(cmdKey) }
         if mods.contains(.option) { c |= UInt32(optionKey) }
         if mods.contains(.control) { c |= UInt32(controlKey) }

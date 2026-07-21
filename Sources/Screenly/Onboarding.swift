@@ -79,10 +79,10 @@ struct OnboardingView: View {
 
             VStack(alignment: .leading, spacing: 14) {
                 infoRow(icon: CaptureMode.region.systemImage,
-                        title: "Região  ·  \(Shortcut.display(.region))",
+                        title: "Região  ·  \(Shortcut.display(CaptureMode.region))",
                         text: "Arrasta para selecionar uma área. Espaço alterna para modo janela.")
                 infoRow(icon: CaptureMode.screen.systemImage,
-                        title: "Ecrã inteiro  ·  \(Shortcut.display(.screen))",
+                        title: "Ecrã inteiro  ·  \(Shortcut.display(CaptureMode.screen))",
                         text: "Captura tudo de uma vez. Muda os atalhos nas Definições.")
                 permissionCard
             }

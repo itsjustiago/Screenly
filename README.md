@@ -23,6 +23,9 @@ clipboard e mostra as capturas recentes. Feito por nós, sem anúncios nem lixo.
   - **Região** (`⌃⇧2`) — arrasta para selecionar; ajusta a seleção antes de exportar.
   - **Janela** (`⌃⇧3`) — escolhe uma janela (sem sombra).
   - **Ecrã inteiro** (`⌃⇧4`) — captura tudo, com atraso opcional.
+- **Conta-gotas** (`⌃⇧1`) — escolhe a cor de qualquer pixel do ecrã com a lupa do
+  sistema. Copia logo o **HEX** para o clipboard e mostra um cartão com **RGB** e
+  **CSS** a um clique, além de um histórico das **cores recentes** na barra de menus.
 - **Editor de anotação** (por defeito) — ao capturar, o ecrã **congela** e podes:
   - **ajustar a seleção** — arrastar as pegas dos cantos/lados ou mover o retângulo;
   - **desenhar por cima** — seta, retângulo, círculo, linha, caneta, marcador e texto,
@@ -88,6 +91,7 @@ Sources/Screenly/
   CapturePreview.swift     — pré-visualização flutuante pós-captura
   Annotation.swift         — modelo de anotação + ShapesCanvas (render partilhado)
   AnnotationToolbar.swift  — barra de ferramentas (tools, cores, espessura, exportar)
+  ColorPicker.swift        — conta-gotas do ecrã (NSColorSampler) + toast + histórico
   SelectionOverlay.swift   — overlay de região: congelar + selecionar + anotar
   AnnotationEditorWindow   — editor em janela (modos janela / ecrã inteiro)
   Permissions.swift        — permissão de Gravação de Ecrã

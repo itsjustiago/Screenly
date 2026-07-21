@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let settings = SettingsController()
     private let updater = UpdateController()
     private lazy var gallery = GalleryController(store: store)
+    private let colorPicker = ColorPickerController()
 
     private var hotKeys: [HotKey] = []
     private var statusItem: NSStatusItem?
@@ -145,6 +146,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             hk?.onFire = { [weak self] in self?.capture(mode) }
             return hk
         }
+        // The screen colour picker rides the same global-hotkey machinery.
+        let picker = PickerAction.eyedropper
+        if let hk = HotKey(keyCode: UInt32(Shortcut.keyCode(picker)),
+                           modifiers: Shortcut.carbonModifiers(picker),
+                           id: picker.hotKeyID) {
+            hk.onFire = { [weak self] in self?.pickColor() }
+            hotKeys.append(hk)
+        }
     }
 
     private func suspendHotKeys() {
@@ -168,6 +177,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    // MARK: - Colour picker
+
+    private func pickColor() {
+        dismissPopover()
+        colorPicker.pick()
+    }
+
+    private func copyRecentColor(_ hex: String) {
+        dismissPopover()
+        colorPicker.copyRecent(hex)
+    }
+
     // MARK: - Status bar
 
     private func setupStatusItem() {
@@ -188,6 +209,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             store: store,
             model: menuModel,
             onCapture: { [weak self] mode in self?.capture(mode) },
+            onPickColor: { [weak self] in self?.pickColor() },
+            onPickRecentColor: { [weak self] hex in self?.copyRecentColor(hex) },
             onPickRecent: { [weak self] shot in self?.pickRecent(shot) },
             onRevealRecent: { [weak self] shot in self?.revealRecent(shot) },
             onShowGallery: { [weak self] in self?.dismissPopover(); self?.gallery.show() },
@@ -237,6 +260,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         menuModel.count = store.items.count
         menuModel.shortcuts = Dictionary(
             uniqueKeysWithValues: CaptureMode.allCases.map { ($0.rawValue, Shortcut.display($0)) })
+        menuModel.pickerShortcut = Shortcut.display(PickerAction.eyedropper)
+        menuModel.recentColors = ColorHistory.colors
         Permissions.shared.refresh()
         menuModel.hasScreenRecording = Permissions.shared.isTrusted
         menuModel.availableUpdate = availableUpdate

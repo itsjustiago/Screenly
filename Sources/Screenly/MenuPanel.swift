@@ -6,6 +6,8 @@ import AppKit
 final class ScreenlyMenuModel: ObservableObject {
     @Published var count = 0
     @Published var shortcuts: [String: String] = [:]   // CaptureMode.rawValue → display
+    @Published var pickerShortcut = ""                 // colour-picker shortcut display
+    @Published var recentColors: [String] = []         // last picked colours, newest first
     @Published var hasScreenRecording = true
     @Published var availableUpdate: UpdateInfo?
 }
@@ -17,6 +19,8 @@ struct MenuPanel: View {
     @ObservedObject var model: ScreenlyMenuModel
 
     var onCapture: (CaptureMode) -> Void
+    var onPickColor: () -> Void
+    var onPickRecentColor: (String) -> Void
     var onPickRecent: (Shot) -> Void
     var onRevealRecent: (Shot) -> Void
     var onShowGallery: () -> Void
@@ -51,7 +55,7 @@ struct MenuPanel: View {
                     .padding(.bottom, 8)
             }
 
-            // Primary actions: the three capture modes.
+            // Primary actions: the three capture modes + the colour picker.
             VStack(spacing: 1) {
                 ForEach(CaptureMode.allCases) { mode in
                     MenuButton(action: { onCapture(mode) }) {
@@ -60,8 +64,15 @@ struct MenuPanel: View {
                                         systemImage: mode.systemImage)
                     }
                 }
+                MenuButton(action: onPickColor) {
+                    MenuActionLabel(title: PickerAction.eyedropper.title,
+                                    shortcut: model.pickerShortcut,
+                                    systemImage: "eyedropper")
+                }
             }
             .padding(.horizontal, edge)
+
+            recentColorsSection
 
             recentSection
 
@@ -107,6 +118,39 @@ struct MenuPanel: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - Recent colours
+
+    @ViewBuilder private var recentColorsSection: some View {
+        if !model.recentColors.isEmpty {
+            Text("CORES RECENTES")
+                .font(.caption2.weight(.semibold))
+                .tracking(0.6)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, contentInset)
+                .padding(.top, 12)
+                .padding(.bottom, 5)
+
+            HStack(spacing: 7) {
+                ForEach(model.recentColors, id: \.self) { hex in
+                    Button { onPickRecentColor(hex) } label: {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color(hex: hex))
+                            .frame(width: 22, height: 22)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(.primary.opacity(0.15))
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copiar \(hex)")
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, contentInset)
         }
     }
 

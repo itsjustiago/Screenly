@@ -2,9 +2,12 @@ import SwiftUI
 import AppKit
 import Carbon.HIToolbox
 
+/// The capture modes plus the colour picker, in the order they appear in Settings.
+let shortcutSlots: [ShortcutSlot] = CaptureMode.allCases.map { $0 as ShortcutSlot } + [PickerAction.eyedropper]
+
 final class SettingsModel: ObservableObject {
-    @Published var shortcuts: [String: String]
-    @Published var recordingMode: CaptureMode?
+    @Published var shortcuts: [String: String]   // slot.shortcutKey → display
+    @Published var recordingKey: String?          // shortcutKey being recorded
     @Published var annotate = CaptureSettings.annotate
     @Published var saveFolderPath = CaptureSettings.saveFolder.path
     @Published var saveToFolder = CaptureSettings.saveToFolder
@@ -21,7 +24,7 @@ final class SettingsModel: ObservableObject {
 
     init() {
         shortcuts = Dictionary(
-            uniqueKeysWithValues: CaptureMode.allCases.map { ($0.rawValue, Shortcut.display($0)) })
+            uniqueKeysWithValues: shortcutSlots.map { ($0.shortcutKey, Shortcut.display($0)) })
     }
 }
 
@@ -53,7 +56,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
 
     private func refreshFromSystem() {
         model.shortcuts = Dictionary(
-            uniqueKeysWithValues: CaptureMode.allCases.map { ($0.rawValue, Shortcut.display($0)) })
+            uniqueKeysWithValues: shortcutSlots.map { ($0.shortcutKey, Shortcut.display($0)) })
         model.annotate = CaptureSettings.annotate
         model.saveFolderPath = CaptureSettings.saveFolder.path
         model.launchAtLogin = LoginItem.isEnabled
@@ -63,8 +66,8 @@ final class SettingsController: NSObject, NSWindowDelegate {
     private func build() {
         let view = SettingsView(
             model: model,
-            startRecording: { [weak self] mode in self?.startRecording(mode) },
-            resetShortcut: { [weak self] mode in self?.resetShortcut(mode) },
+            startRecording: { [weak self] slot in self?.startRecording(slot) },
+            resetShortcut: { [weak self] slot in self?.resetShortcut(slot) },
             chooseFolder: { [weak self] in self?.chooseFolder() },
             revealFolder: { NSWorkspace.shared.activateFileViewerSelecting([CaptureSettings.saveFolder]) },
             checkNow: { [weak self] in self?.checkNow() },
@@ -84,9 +87,9 @@ final class SettingsController: NSObject, NSWindowDelegate {
 
     // MARK: - Shortcut recording
 
-    private func startRecording(_ mode: CaptureMode) {
+    private func startRecording(_ slot: ShortcutSlot) {
         stopRecording()
-        model.recordingMode = mode
+        model.recordingKey = slot.shortcutKey
         onRecordingChange?(true)
         recordMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self else { return event }
@@ -102,8 +105,8 @@ final class SettingsController: NSObject, NSWindowDelegate {
             let display = Shortcut.displayString(keyCode: Int(event.keyCode),
                                                  modifiers: mods,
                                                  chars: event.charactersIgnoringModifiers)
-            Shortcut.save(mode, keyCode: Int(event.keyCode), modifiers: mods, display: display)
-            self.model.shortcuts[mode.rawValue] = display
+            Shortcut.save(slot, keyCode: Int(event.keyCode), modifiers: mods, display: display)
+            self.model.shortcuts[slot.shortcutKey] = display
             self.stopRecording()
             self.onShortcutsChanged?()
             return nil
@@ -113,15 +116,15 @@ final class SettingsController: NSObject, NSWindowDelegate {
     private func stopRecording() {
         if let recordMonitor { NSEvent.removeMonitor(recordMonitor) }
         recordMonitor = nil
-        if model.recordingMode != nil {
-            model.recordingMode = nil
+        if model.recordingKey != nil {
+            model.recordingKey = nil
             onRecordingChange?(false)
         }
     }
 
-    private func resetShortcut(_ mode: CaptureMode) {
-        Shortcut.resetToDefault(mode)
-        model.shortcuts[mode.rawValue] = Shortcut.display(mode)
+    private func resetShortcut(_ slot: ShortcutSlot) {
+        Shortcut.resetToDefault(slot)
+        model.shortcuts[slot.shortcutKey] = Shortcut.display(slot)
         onShortcutsChanged?()
     }
 
@@ -160,8 +163,8 @@ final class SettingsController: NSObject, NSWindowDelegate {
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
-    var startRecording: (CaptureMode) -> Void
-    var resetShortcut: (CaptureMode) -> Void
+    var startRecording: (ShortcutSlot) -> Void
+    var resetShortcut: (ShortcutSlot) -> Void
     var chooseFolder: () -> Void
     var revealFolder: () -> Void
     var checkNow: () -> Void
@@ -177,9 +180,9 @@ struct SettingsView: View {
                 header
 
                 SettingsSection(title: "Atalhos globais") {
-                    ForEach(Array(CaptureMode.allCases.enumerated()), id: \.element.id) { index, mode in
+                    ForEach(Array(shortcutSlots.enumerated()), id: \.element.shortcutKey) { index, slot in
                         if index > 0 { RowDivider() }
-                        shortcutRow(mode)
+                        shortcutRow(slot)
                     }
                 }
 
@@ -291,23 +294,23 @@ struct SettingsView: View {
         .background(.background)
     }
 
-    private func shortcutRow(_ mode: CaptureMode) -> some View {
-        let recording = model.recordingMode == mode
+    private func shortcutRow(_ slot: ShortcutSlot) -> some View {
+        let recording = model.recordingKey == slot.shortcutKey
         return SettingsRow(
-            title: mode.title,
+            title: slot.title,
             subtitle: recording ? "Prime a combinação (inclui ⌘, ⌥, ⌃ ou ⇧). Esc cancela." : nil
         ) {
             HStack(spacing: 8) {
-                Button(action: { startRecording(mode) }) {
-                    Text(recording ? "Prime as teclas…" : (model.shortcuts[mode.rawValue] ?? ""))
+                Button(action: { startRecording(slot) }) {
+                    Text(recording ? "Prime as teclas…" : (model.shortcuts[slot.shortcutKey] ?? ""))
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .frame(minWidth: 84)
                 }
                 .buttonStyle(.bordered)
-                .disabled(model.recordingMode != nil && !recording)
-                Button("Repor") { resetShortcut(mode) }
+                .disabled(model.recordingKey != nil && !recording)
+                Button("Repor") { resetShortcut(slot) }
                     .buttonStyle(.borderless)
-                    .disabled(model.recordingMode != nil)
+                    .disabled(model.recordingKey != nil)
             }
         }
     }
